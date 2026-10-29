@@ -15,7 +15,9 @@ passlib[bcrypt]>=1.7.4
 bcrypt==4.0.1
 python-multipart>=0.0.9
 
-sqlalchemy>=2.0.0
+# [asyncio] 会带上 greenlet：异步引擎（含 Alembic async env）必需，
+# 缺了它干净环境下 pytest / alembic 会直接 ImportError。
+sqlalchemy[asyncio]>=2.0.0
 asyncmy>=0.2.9
 
 # DB 迁移
