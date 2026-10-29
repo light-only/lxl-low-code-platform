@@ -95,7 +95,21 @@ APP_PORT=8000
 | `docker-registry-creds` | Username with password | 镜像仓库账号密码 |
 | `deploy-ssh-key` | SSH Username with private key | 能免密登录两台服务器的私钥，用户名填 `deploy` |
 
-**创建任务**：New Item → Pipeline → 名字 `lxl-backend-pipeline` → Pipeline script from SCM → Git（填仓库地址）→ Branch `main` → Script Path `Jenkinsfile`。
+**创建任务**：New Item → Pipeline → 名字 `lxl-backend-pipeline` → Pipeline script from SCM → Git
+
+- Repository URL：`https://gitee.com/light_111/lxl-low-code-platform.git`
+- Branch Specifier：`*/main`
+- Script Path：`Jenkinsfile`
+- 仓库若是私有的，Credentials 里选一个 Gitee 账号密码/私人令牌凭据
+
+### 4. Gitee 仓库配置
+
+1. **默认分支设为 `main`**：仓库 → 管理 → 分支设置，确认默认分支是 `main`（Gitee 新建仓库默认可能是 `master`）。
+2. **配置 Webhook 触发 Jenkins**：仓库 → 管理 → WebHooks → 添加
+   - URL：`http://<jenkins地址>/job/lxl-backend-pipeline/build?token=<构建令牌>`
+   - 触发事件：Push、Merge Request
+   - 构建令牌在 Jenkins 任务里开启「触发远程构建 (例如, 使用脚本)」后生成
+3. **服务器拉代码**：如果仓库是私有的，在 Gitee → 管理 → 部署公钥管理里添加两台服务器的公钥（只读部署公钥即可）；否则 `git pull` 会要求输入账号密码。
 
 **参数**（首次构建前确认）：
 
