@@ -1,0 +1,26 @@
+# 构建上下文排除项：venv 和本地数据一旦进镜像会让构建慢几十倍
+venv/
+.venv/
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pytest_cache
+
+# 本地数据库与备份
+*.db
+*.sqlite3
+backups/
+*.sql
+
+# 文档、测试与 CI 配置不参与运行
+docs/
+app/tests/
+Jenkinsfile
+docker-compose*.yml

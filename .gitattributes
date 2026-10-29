@@ -1,0 +1,12 @@
+# 统一换行符：Windows 开发、Linux 服务器部署共用同一份仓库
+* text=auto
+
+# 这些文件必须在 Linux 上以 LF 结尾，否则脚本会报 bad interpreter
+*.sh        text eol=lf
+*.py        text eol=lf
+Dockerfile  text eol=lf
+Jenkinsfile text eol=lf
+
+# 不要对二进制做换行转换
+*.png binary
+*.db binary

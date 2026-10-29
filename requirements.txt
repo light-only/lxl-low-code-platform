@@ -1,0 +1,22 @@
+# Core FastAPI Framework & Server
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+
+# Utility & Production
+httpx>=0.27.0
+gunicorn>=21.2.0
+
+# Security & Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+# passlib 1.7.4 已停止维护，与 bcrypt>=4.1 不兼容（初始化后端时报 ValueError），钉在 4.0.1
+bcrypt==4.0.1
+python-multipart>=0.0.9
+
+sqlalchemy>=2.0.0
+asyncmy>=0.2.9
+
+# DB 迁移
+alembic>=1.13.0

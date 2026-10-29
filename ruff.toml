@@ -1,0 +1,7 @@
+line-length = 120
+target-version = "py310"
+
+[lint]
+# CI 里只拦截确定性的问题：语法错误、未定义名称、import 顺序。
+# 团队要加更多规则时在这里逐步开启，避免一次引入大量历史告警。
+select = ["E4", "E7", "E9", "F", "I"]
