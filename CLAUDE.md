@@ -50,10 +50,10 @@ venv/Scripts/python.exe -m alembic upgrade head --sql   # 只打印 DDL，不执
 
 ## CI/CD 约定
 
-- 流水线：[Jenkinsfile](Jenkinsfile)。CI 依次跑 `ruff check`、`pytest`、临时 MySQL 上的 `alembic upgrade head` + `alembic check`、构建镜像；main 分支推送镜像后部署。
+- 流水线：[.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml)。CI 依次跑 `ruff check`、`pytest`、MySQL service 容器上的 `alembic upgrade head` + `alembic check`、构建并推送镜像到 GHCR；main 分支推送后自动部署 staging，生产需手动触发并在 `production` 环境审批。
 - **模型改动和迁移脚本必须在同一个 PR/提交里**，否则 CI 的 `alembic check` 会失败。
 - lint 规则固定在 [ruff.toml](ruff.toml)，不要靠开发者本地全局配置。
-- 服务器部署走 [deploy/deploy.sh](deploy/deploy.sh)，流程是「备份 → 迁移 → 启动 → 健康检查 → 失败回滚应用」；生产由 Jenkins 人工确认后触发。
+- 服务器部署走 [deploy/deploy.sh](deploy/deploy.sh)，流程是「备份 → 迁移 → 启动 → 健康检查 → 失败回滚应用」；生产由 `production` 环境的 Required reviewers 审批后触发。
 - 生产 `.env` 必须 `DEBUG=false`；`.env` 永不提交。
 - 完整接入步骤见 [docs/ci-cd.md](docs/ci-cd.md)。
 

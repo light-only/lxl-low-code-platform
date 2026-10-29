@@ -5,7 +5,8 @@
 *.sh        text eol=lf
 *.py        text eol=lf
 Dockerfile  text eol=lf
-Jenkinsfile text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
 
 # 不要对二进制做换行转换
 *.png binary

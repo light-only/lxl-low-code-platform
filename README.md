@@ -52,7 +52,8 @@ Open http://localhost:8000/docs for the interactive Swagger UI.
 
 ## CI/CD
 
-Jenkins + docker compose，流水线定义在 [Jenkinsfile](Jenkinsfile)。
+GitHub Actions + docker compose，流水线定义在 [.github/workflows/ci-cd.yml](.github/workflows/ci-cd.yml)。
+代码主仓在 Gitee，同时镜像到 GitHub 触发构建；镜像推送到 GHCR。
 
 ```bash
 # 本地等价的检查项

@@ -1,32 +1,27 @@
-# CI/CD 接入说明
+# CI/CD 接入说明（GitHub Actions）
 
-Jenkins（自建）+ Linux 服务器 + docker compose 的完整流程。
+代码主仓在 Gitee，构建在 GitHub Actions 上跑，镜像推送到 GHCR，部署到自己的 Linux 服务器。
 
 ```
-开发者 push / 合并 PR
+开发者 push 到 Gitee（同时镜像到 GitHub）
         │
         ▼
-┌──────────────── Jenkins ────────────────┐
-│ 安装依赖 → ruff → pytest                │
-│ 迁移校验（临时 MySQL 容器）：            │
-│   alembic upgrade head + alembic check  │
-│ 构建镜像 →（main 分支）推送镜像仓库       │
-└───────────────┬─────────────────────────┘
-                │ SSH
-                ▼
-┌──────────── 服务器 ─────────────────────┐
-│ git pull                                │
-│ deploy.sh：                             │
-│   启库 → 备份 → 拉镜像 → alembic upgrade │
-│   → 启动 api → 健康检查（失败自动回滚）  │
-└─────────────────────────────────────────┘
+┌──────────── GitHub Actions（云端，不占你的服务器） ────────────┐
+│ ci:      pip install → ruff → pytest → MySQL 上 alembic check  │
+│ build:   docker build → push ghcr.io/<owner>/<repo>:sha-xxxxx  │
+│ deploy:  SSH → 服务器执行 deploy/deploy.sh                     │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │
+                               ▼
+                    你的服务器（docker compose）
+                    备份 → 迁移 → 启动 → 健康检查 → 失败回滚
 ```
 
 相关文件：
 
 | 文件 | 作用 |
 |---|---|
-| `Jenkinsfile` | 流水线定义（CI + 部署） |
+| `.github/workflows/ci-cd.yml` | 流水线定义 |
 | `docker-compose.prod.yml` | 服务器上的 compose（含一次性 `migrate` 服务） |
 | `deploy/deploy.sh` | 服务器端部署脚本：备份、迁移、启动、健康检查、回滚 |
 | `ruff.toml` | CI 使用的 lint 规则 |
@@ -36,156 +31,160 @@ Jenkins（自建）+ Linux 服务器 + docker compose 的完整流程。
 
 ## 一、一次性准备
 
-### 1. 镜像仓库
+### 1. GitHub 仓库（作为构建入口）
 
-准备一个可访问的 registry（Harbor、阿里云 ACR、GitLab Container Registry 都可以），记下地址。
+在 GitHub 新建一个空仓库，名字建议和 Gitee 一致：`lxl-low-code-platform`。
 
-### 2. 服务器（staging / production 各一台或各一个目录）
-
-以 staging 为例，production 把目录换成 `/srv/lxl-production`：
+让 `git push` 同时推到 Gitee 和 GitHub：
 
 ```bash
-# 部署用户需要能操作 docker
-sudo usermod -aG docker deploy
+git remote set-url --add --push origin https://gitee.com/light_111/lxl-low-code-platform.git
+git remote set-url --add --push origin https://github.com/<你的GitHub用户名>/lxl-low-code-platform.git
 
+git remote -v      # 应该看到两条 push 地址
+git push origin main
+```
+
+之后每次 `git push origin main` 会同时推两个仓库，GitHub 上就能触发 Actions。
+
+> 如果不想配双推，也可以只在要发布时执行 `git push github main`（先用 `git remote add github <地址>` 添加）。
+
+### 2. GitHub 仓库设置
+
+**Settings → Actions → General**：确认允许运行 workflow。
+
+**Settings → Secrets and variables → Actions**：
+
+| 类型 | 名称 | 内容 |
+|---|---|---|
+| Secret | `SSH_PRIVATE_KEY` | 部署私钥的**完整内容**（含 BEGIN/END 行） |
+| Variable | `STAGING_HOST` | 测试服务器地址 |
+| Variable | `STAGING_USER` | `deploy` |
+| Variable | `PROD_HOST` | 生产服务器地址 |
+| Variable | `PROD_USER` | `deploy` |
+
+> 现阶段只有一台服务器时，**先只配 `STAGING_*`**，`PROD_*` 留空。否则生产任务会连到同一台机器上起第二套容器，2C4G 扛不住。
+
+**Settings → Environments**：
+
+- 新建 `staging`：不需要审批
+- 新建 `production`：勾选 **Required reviewers**，填上发布负责人
+
+这样生产部署会停在「等待审批」，有人点通过才会执行。
+
+### 3. 服务器准备
+
+```bash
+# 目录
 sudo mkdir -p /srv/lxl-staging
 sudo chown deploy:deploy /srv/lxl-staging
 
-# 服务器上放一份仓库克隆（deploy 时会 git pull 更新 compose/脚本）
-git clone <你的仓库地址> /srv/lxl-staging
+# 拉代码（部署脚本和 compose 从这里更新）
+su - deploy
 cd /srv/lxl-staging
+git clone https://gitee.com/light_111/lxl-low-code-platform.git .
 
-# 环境变量文件不提交，需在服务器上手工创建
+# 环境变量
 cp .env.example .env
-vim .env
+openssl rand -hex 32       # 生成 SECRET_KEY
+nano .env
 
-chmod +x deploy/deploy.sh
+# 登录镜像仓库（GHCR 私有镜像必须）
+# 先在 GitHub 生成 PAT（classic），勾选 read:packages
+docker login ghcr.io -u <GitHub用户名>
+# 提示输入密码时粘贴 PAT
 ```
 
-服务器 `.env` 最少需要这些值（**不要提交到 git**）：
+`.env` 关键项：
 
 ```ini
-APP_NAME=lxl-low-code-platform-backend
 APP_ENV=production
-DEBUG=false                       # 生产必须关掉，否则会打印所有 SQL
-SECRET_KEY=<随机生成的长字符串>
-BACKEND_CORS_ORIGINS=["https://your-frontend.example.com"]
-
-DB_TYPE=mysql
-MYSQL_ROOT_PASSWORD=<强密码>       # 只在服务器上存在
-MYSQL_USER=app
+DEBUG=false
+SECRET_KEY=<openssl 生成的>
+MYSQL_ROOT_PASSWORD=<强密码>
 MYSQL_PASSWORD=<强密码>
-MYSQL_HOST=mysql                  # compose 内部服务名
+MYSQL_HOST=mysql
 MYSQL_PORT=3306
 MYSQL_DB=lxl_low_code
-MYSQL_HOST_PORT=3307              # 只监听 127.0.0.1，不对外暴露
+MYSQL_HOST_PORT=3307
 APP_PORT=8000
 ```
 
-防火墙只放行应用端口（建议前面挂 Nginx/网关，8000 不直接对外）。
+### 4. 部署密钥
 
-### 3. Jenkins
+`SSH_PRIVATE_KEY` 用一对专门给部署的密钥，不要复用个人密钥：
 
-**节点要求**：git、python3.12、docker（含 compose v2）、curl、ssh，并且 Jenkins 用户能执行 docker。
+```bash
+# 在你的本机生成
+ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/lxl_deploy -N ""
 
-**凭据**（Manage Jenkins → Credentials）：
+# 公钥放到服务器 deploy 用户的 authorized_keys
+ssh-copy-id -i ~/.ssh/lxl_deploy.pub deploy@191.40.44.149
 
-| ID | 类型 | 内容 |
-|---|---|---|
-| `docker-registry-creds` | Username with password | 镜像仓库账号密码 |
-| `deploy-ssh-key` | SSH Username with private key | 能免密登录两台服务器的私钥，用户名填 `deploy` |
-
-**创建任务**：New Item → Pipeline → 名字 `lxl-backend-pipeline` → Pipeline script from SCM → Git
-
-- Repository URL：`https://gitee.com/light_111/lxl-low-code-platform.git`
-- Branch Specifier：`*/main`
-- Script Path：`Jenkinsfile`
-- 仓库若是私有的，Credentials 里选一个 Gitee 账号密码/私人令牌凭据
-
-### 4. Gitee 仓库配置
-
-1. **默认分支设为 `main`**：仓库 → 管理 → 分支设置，确认默认分支是 `main`（Gitee 新建仓库默认可能是 `master`）。
-2. **配置 Webhook 触发 Jenkins**：仓库 → 管理 → WebHooks → 添加
-   - URL：`http://<jenkins地址>/job/lxl-backend-pipeline/build?token=<构建令牌>`
-   - 触发事件：Push、Merge Request
-   - 构建令牌在 Jenkins 任务里开启「触发远程构建 (例如, 使用脚本)」后生成
-3. **服务器拉代码**：如果仓库是私有的，在 Gitee → 管理 → 部署公钥管理里添加两台服务器的公钥（只读部署公钥即可）；否则 `git pull` 会要求输入账号密码。
-
-**参数**（首次构建前确认）：
-
-- `REGISTRY`：镜像仓库地址，如 `harbor.example.com`
-- `IMAGE_NAME`：默认 `lxl-low-code-platform-backend`
-- `STAGING_HOST` / `PROD_HOST`：服务器地址
-- `DEPLOY_ENV`：默认 `staging`；`none` 只跑 CI；`production` 会先部署 staging，再等人工确认后部署生产
-
-> 参数默认值由 `Jenkinsfile` 里的 `choices` 顺序决定（第一项为默认），在任务页面改默认值不生效，要改就直接改 `Jenkinsfile`。
+# 私钥内容贴到 GitHub Secret SSH_PRIVATE_KEY
+cat ~/.ssh/lxl_deploy
+```
 
 ---
 
 ## 二、首次发布
 
-1. 先在本地把基线迁移跑起来（见仓库 README）。
-2. 提交并推送到 `main`（服务器上也需要能 `git pull` 到最新，否则拿不到 `deploy/` 脚本）。
-3. Jenkins 里 Build with Parameters，选 `DEPLOY_ENV=staging`。
-4. 流水线会依次执行：
-   - ruff + pytest
-   - 临时 MySQL 上 `alembic upgrade head` + `alembic check`
-   - 构建并推送镜像
-   - SSH 到 staging：备份（首次是空库）→ 迁移建表 → 启动 → 健康检查
-5. 在 staging 上验证：
+1. 确认 GitHub 上已有代码（`git push origin main`）。
+2. 打开仓库 → **Actions** → 选择 `CI/CD` → **Run workflow**
+3. `deploy_env` 选 `none`，先只验证 CI。
+4. 绿了以后，再选 `staging` 构建并部署。
+5. 在服务器上验证：
 
 ```bash
-ssh deploy@staging.example.com
 cd /srv/lxl-staging
 docker compose -f docker-compose.prod.yml ps
-docker compose -f docker-compose.prod.yml logs --tail=50 api
 curl -s http://127.0.0.1:8000/health
 docker compose -f docker-compose.prod.yml exec -T mysql \
   sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SELECT version_num FROM alembic_version" "$MYSQL_DATABASE"'
 ```
 
-6. 测试通过后，再选 `DEPLOY_ENV=production` 构建一次。生产阶段前会弹出 **人工确认**，确认后才会执行。
+6. 生产：再 Run workflow，选 `production`。GitHub 会先跑 staging，然后在 production 环境等待审批。
 
 ---
 
-## 三、日常发布流程
+## 三、日常流程
 
 | 操作 | 结果 |
 |---|---|
-| 功能分支 push | 只跑 CI（ruff / pytest / 迁移校验 / 构建镜像），不部署 |
-| 合并到 `main` | CI + 推送镜像 + **自动部署 staging** |
-| 手动选 `DEPLOY_ENV=production` | 先自动走一遍 staging，再等人工确认后部署生产 |
-| 手动选 `DEPLOY_ENV=none` | 只跑 CI，适合验证改动 |
-
-> - Jenkins 任务需要配置 Webhook（或 SCM 轮询）监听 `main`，否则合并后不会自动构建。
-> - 生产确认弹窗有超时限制：整个流水线 `timeout 90 分钟`，超过未确认会自动中止，**不会部署**。发布窗口较长时请临时调大 `Jenkinsfile` 里的 `timeout`。
+| PR 到 main | 只跑 `ci`（lint / pytest / 迁移校验） |
+| push 到 main | `ci` → 构建推送镜像 → 自动部署 staging |
+| 手动 Run workflow → `none` | 只跑 CI + 构建镜像 |
+| 手动 Run workflow → `staging` | CI + 构建 + 部署 staging |
+| 手动 Run workflow → `production` | CI + 构建 + staging + **审批后**生产 |
 
 ### 加字段/改表结构时
 
-1. 本地改模型 → `alembic revision --autogenerate` → review → `alembic upgrade head` → pytest。
-2. 迁移文件跟模型一起提交（CI 的 `alembic check` 会拦住只改模型不改迁移的情况）。
-3. 合并 → staging 自动部署 → 回归 → 手动触发生产。
-4. 新列默认用**可空**（`Mapped[str | None]`），需要非空走 expand/contract，分两次发布。
+1. 本地改模型 → `alembic revision --autogenerate` → review → `alembic upgrade head` → pytest
+2. 迁移文件和模型**一起提交**
+3. push → CI 的 `alembic check` 会拦住「只改模型没生成迁移」
+4. 新列默认用可空（`Mapped[str | None]`），非空走 expand/contract 分两次发布
 
 ---
 
 ## 四、回滚
 
-**应用回滚（最常用）**
+**应用回滚**
+
+健康检查失败时 `deploy.sh` 会自动用 `.last_good_image` 回滚。手工回滚：
 
 ```bash
-ssh deploy@host
-cd /srv/lxl-production
-cat .last_good_image                          # 上一个成功版本
-IMAGE=<上一个镜像> ./deploy/deploy.sh production <上一个镜像>
+ssh deploy@191.40.44.149
+cd /srv/lxl-staging
+cat .last_good_image
+IMAGE=<上一个镜像> ./deploy/deploy.sh staging <上一个镜像>
 ```
 
-健康检查失败时 `deploy.sh` 会**自动**用 `.last_good_image` 回滚应用，并保留当前数据库结构。
+也可以重新 Run workflow 指定一个旧 commit——但 Actions 默认构建当前 HEAD，更直接的方式是上面的命令。
 
 **数据库回滚**
 
-- staging：可以 `alembic downgrade -1`，但要注意 `downgrade()` 是否有损。
-- production：**不执行 downgrade**。恢复备份：
+- staging：可以 `alembic downgrade -1`
+- production：不 downgrade，用备份恢复
 
 ```bash
 cd /srv/lxl-production
@@ -193,29 +192,43 @@ docker compose -f docker-compose.prod.yml exec -T mysql \
   sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' < backups/xxx.sql
 ```
 
-备份目录 `backups/` 自动保留最近 10 份，每次部署前都会生成。
+---
+
+## 五、免费额度说明
+
+| 项目 | 额度 |
+|---|---|
+| 公共仓库 | Actions 分钟数无限制 |
+| 私有仓库 | 每月 2000 分钟（Free 计划） |
+| GHCR 存储 | 私有镜像有免费额度，超出按 GB 计费 |
+| 并发 | Free 计划 20 个并发任务 |
+
+按本项目的流水线（每次约 3–5 分钟），私有仓库每月 2000 分钟大约够 400 次构建。
 
 ---
 
-## 五、排错
+## 六、排错
 
 | 现象 | 原因 / 处理 |
 |---|---|
-| `permission denied ... docker.sock` | `sudo usermod -aG docker deploy` 后重新登录 |
-| `alembic check` 失败 | 改了模型但没生成迁移；本地补 `alembic revision --autogenerate` |
-| 部署脚本报 `缺少 .env` | 服务器上没创建环境变量文件 |
-| 镜像拉取失败 | 服务器未 `docker login`，或在 compose 里配置了错误的 registry |
-| 健康检查一直失败 | `docker compose logs api`；常见原因是 `.env` 里的 `MYSQL_*` 配错或 `SECRET_KEY` 缺失 |
-| `git pull` 失败 | 部署用户的 SSH key 没加到仓库（只读 deploy key 即可） |
-| 首次部署备份为空 | 正常，此时库还是空的；从第二次起才有内容 |
+| Actions 里没有 workflow | 代码没推到 GitHub，或 workflow 文件不在默认分支 |
+| `alembic check` 失败 | 改了模型没生成迁移 |
+| 登录 GHCR 失败 | workflow 需要 `packages: write`（已在文件里配置） |
+| 服务器拉镜像 `unauthorized` | 服务器没执行 `docker login ghcr.io`，或 PAT 没 `read:packages` |
+| SSH 部署失败 `Permission denied` | `SSH_PRIVATE_KEY` 不完整，或公钥没加到 deploy 用户 |
+| `git pull` 失败 | 服务器用的是 Gitee，确认 GitHub 和 Gitee 内容一致；私有仓库要配 Gitee 部署公钥 |
+| 部署成功但健康检查失败 | `docker compose logs api`；常见是 `.env` 的 MySQL 配置或 `SECRET_KEY` |
+| 生产任务一直等待 | 正常，去 Actions 页面点 Approve |
 
 ---
 
-## 六、上线前检查清单
+## 七、上线前检查清单
 
 - [ ] 生产 `.env` 里 `DEBUG=false`、`SECRET_KEY` 已更换
 - [ ] 数据库端口只监听 `127.0.0.1`
-- [ ] 应用端口前面有网关/反向代理和 HTTPS
-- [ ] 服务器 `backups/` 目录有写入权限且磁盘充足
-- [ ] Jenkins 里生产任务有权限控制，只有发布负责人能触发
-- [ ] 迁移脚本经过 review，确认向后兼容（旧代码能在新 schema 上运行）
+- [ ] 应用端口前有网关/反向代理和 HTTPS
+- [ ] `backups/` 目录有写入权限且磁盘充足
+- [ ] `production` 环境配置了 Required reviewers
+- [ ] 迁移脚本经过 review，确认向后兼容
+- [ ] 服务器执行过 `docker login ghcr.io`
+- [ ] 只配置了当前实际拥有的环境（单机时先不要同时跑 staging 和 production）

@@ -22,5 +22,5 @@ backups/
 # 文档、测试与 CI 配置不参与运行
 docs/
 app/tests/
-Jenkinsfile
+.github/
 docker-compose*.yml

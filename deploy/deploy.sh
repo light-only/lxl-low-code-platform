@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# 服务器端部署脚本（由 Jenkins 通过 SSH 调用，也可手工执行）
+# 服务器端部署脚本（由 GitHub Actions 通过 SSH 调用，也可手工执行）
 #
 #   ./deploy/deploy.sh <staging|production> <image:tag>
 #
