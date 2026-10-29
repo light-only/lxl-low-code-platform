@@ -3,6 +3,8 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.28.0
 pydantic-settings>=2.2.0
 python-dotenv>=1.0.0
+# schemas 里用了 pydantic.EmailStr，它需要 email-validator（pydantic 不会自动装）
+email-validator>=2.0.0
 
 # Utility & Production
 httpx>=0.27.0
