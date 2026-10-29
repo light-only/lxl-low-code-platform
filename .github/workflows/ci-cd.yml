@@ -133,8 +133,10 @@ jobs:
   deploy-staging:
     name: Deploy Staging
     needs: build-and-push
+    # STAGING_HOST 未配置时跳过，避免服务器还没准备好就报红
     if: >-
       github.ref == 'refs/heads/main' &&
+      vars.STAGING_HOST != '' &&
       (github.event_name == 'push' ||
        inputs.deploy_env == 'staging' ||
        inputs.deploy_env == 'production')
@@ -170,6 +172,7 @@ jobs:
     needs: [build-and-push, deploy-staging]
     if: >-
       github.ref == 'refs/heads/main' &&
+      vars.PROD_HOST != '' &&
       github.event_name == 'workflow_dispatch' &&
       inputs.deploy_env == 'production'
     runs-on: ubuntu-latest
